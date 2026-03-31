@@ -1,92 +1,103 @@
-# vms-v2
+## Stream Platform (VOD + Livestream)
 
+A backend platform that provides **streaming services for a variety of content**, including:
 
+- **VOD**: media upload/processing and playlist management
+- **Livestream**: RTMP ingest and Low-Latency HLS delivery
+- **APIs**: HTTP REST API (Swagger) and a gRPC service for media transfer
 
-## Getting started
+This repository contains Go services plus Docker Compose orchestration for the supporting infrastructure (Postgres, Redis, RabbitMQ, etc.).
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## What’s in this repo
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+- **HTTP API service** (`cmd/http`):
+  - Health: `GET /ping`
+  - Swagger UI: `GET /swagger/*`
+  - Prometheus metrics: `GET /metrics`
+  - pprof (debug): `:6060`
+  - REST base path: `/api`
+  - Swagger spec: `docs/swagger.yaml` / `docs/swagger.json`
+- **Livestream service** (Docker profile `livestream`):
+  - RTMP ingest + LL-HLS output, configured by `aioz-live.yml`
+  - Connect/disconnect webhooks back into the HTTP API
+- **Infrastructure**:
+  - Postgres (custom image, init SQL in `00_init.sql`)
+  - Redis
+  - RabbitMQ (management image)
 
 ```
-cd existing_repo
-git remote add origin https://10.0.0.50/tuan.quang.tran/vms-v2.git
-git branch -M main
-git push -uf origin main
+
+## Requirements
+
+- **Go**: 1.22 (see `go.mod`)
+- **Docker + Docker Compose**
+
+## Configuration
+
+1) Create `app.env` from the example:
+
+```bash
+cp env-example/app.env app.env
 ```
 
-## Integrate with your tools
+2) Fill required values (at minimum):
+- **Database**: `POSTGRES_*`
+- **Redis**: `REDIS_*`
+- **RabbitMQ**: `RABBITMQ_*`
+- **JWT keys**: `ACCESS_TOKEN_*`, `REFRESH_TOKEN_*` (EdDSA keys in base64 format)
+- **Storage paths**: `INPUT_STORAGE_PATH`, `OUTPUT_STORAGE_PATH`
 
-- [ ] [Set up project integrations](https://10.0.0.50/tuan.quang.tran/vms-v2/-/settings/integrations)
+## Run with Docker Compose
 
-## Collaborate with your team
+This repo uses Compose **profiles**.
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Automatically merge when pipeline succeeds](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+### VOD stack (API + Postgres/Redis/RabbitMQ)
 
-## Test and Deploy
+```bash
+docker compose --profile vod up -d --build
+```
 
-Use the built-in continuous integration in GitLab.
+### Livestream stack (RTMP ingest + HLS delivery + API dependencies)
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+```bash
+docker compose --profile livestream up -d --build
+```
 
-***
+## Useful ports (defaults)
 
-# Editing this README
+- **HTTP API**: `8080`
+  - Swagger UI: `http://localhost:8080/swagger/index.html`
+  - Metrics: `http://localhost:8080/metrics`
+- **pprof**: `http://localhost:6060/debug/pprof/`
+- **gRPC**: `50051`
+- **RTMP ingest**: `1935`
+- **HLS (LL-HLS)**: `2327`
+- **Postgres**: `5437` (host) → `5432` (container)
+- **RabbitMQ management**: `15675` (host) → `15672` (container)
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!).  Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
+## Run locally (without Docker)
 
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+Build and run the HTTP API:
 
-## Name
-Choose a self-explaining name for your project.
+```bash
+make build
+APP_ENV=debug ./bin/api
+```
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+## API documentation
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+- **Swagger YAML**: `docs/swagger.yaml`
+- **Swagger JSON**: `docs/swagger.json`
+- **Swagger UI**: `GET /swagger/*` (served by the HTTP API)
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a media (you'll frequently see GIFs rather than actual media). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+Notable API areas include:
+- **Auth**: `/auth/*`
+- **Livestreams**: `/live_streams*`
+- **Playlists**: `/playlists*`
+- **Webhooks**: `/webhooks*`
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+## Notes / repo assumptions
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+- **Nginx/OpenResty config**: `docker-compose.yml` and `Dockerfile.nginx` reference `nginx.conf` and `nginx/redis_lookup.lua`. These files are expected in the deployment environment (they are not currently present in this repository snapshot).
+- **Monitoring configs**: `docker-compose.yml` references `prometheus.yml`, `grafana/datasources.yaml`, and `promtail-config.yaml`. If you enable the `monitor` profile, make sure those files exist.
+- **Job/worker system**: `internal/proto/job.proto` describes a job service API used for processing workflows (configured via `JOB_SERVER_HOST` / `JOB_SERVER_PORT`).
