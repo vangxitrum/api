@@ -1,0 +1,26 @@
+FROM postgres:16
+
+RUN apt-get update && apt-get install -y \
+    postgresql-16-pgagent \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY ./00_init.sql /docker-entrypoint-initdb.d/
+
+COPY ./postgres-prod-entrypoint.sh /usr/local/bin/custom-entrypoint.sh
+
+RUN chmod +x /usr/local/bin/custom-entrypoint.sh
+
+RUN echo "wal_level = replica" >> /usr/share/postgresql/postgresql.conf.sample && \
+    echo "max_wal_senders = 10" >> /usr/share/postgresql/postgresql.conf.sample && \
+    echo "max_replication_slots = 10" >> /usr/share/postgresql/postgresql.conf.sample && \
+    echo "hot_standby = on" >> /usr/share/postgresql/postgresql.conf.sample && \
+    echo "archive_mode = on" >> /usr/share/postgresql/postgresql.conf.sample && \
+    echo "archive_command = 'test ! -f /archive/%f && cp %p /archive/%f'" >> /usr/share/postgresql/postgresql.conf.sample
+
+RUN mkdir -p /archive && chown postgres:postgres /archive
+
+EXPOSE 5432
+
+ENTRYPOINT ["/usr/local/bin/custom-entrypoint.sh"]
+
+CMD ["postgres"]

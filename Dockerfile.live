@@ -1,0 +1,37 @@
+FROM ubuntu:22.04
+
+ENV TZ=Asia/Ho_Chi_Minh \
+    DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y \
+    curl \
+    ffmpeg \
+    ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV APP_ENV=app
+
+USER root
+
+RUN mkdir /app
+
+WORKDIR /app
+
+COPY ./bin/livestream .
+
+COPY ./app.env ./bin/
+
+# COPY ./public ./public
+
+# COPY ./ffmpegd ./ffmpegd
+
+# COPY ./ffprobe ./ffprobe
+
+COPY ./aioz-live.yml ./aioz-live.yml
+
+RUN mkdir -p /app/streamId && \
+    chown -R 1000:1000 /app/streamId && \
+    chmod 755 /app/streamId
+
+CMD ["/app/livestream"]

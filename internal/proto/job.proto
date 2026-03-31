@@ -1,0 +1,242 @@
+syntax = "proto3";
+
+package job; // buf:lint:ignore PACKAGE_VERSION_SUFFIX
+option go_package = "/job";
+
+
+import "google/protobuf/empty.proto";
+
+service JobService {
+    rpc RegisterJob(RegisterJobRequest) returns (RegisterJobResponse);
+    rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+
+    rpc UploadMediaResource(stream UploadMediaResourceRequest) returns (UploadMediaResourceResponse);
+
+    rpc DownloadMediaResource(DownloadMediaResourceRequest) returns (stream DownloadMediaResourceResponse);
+
+
+    rpc CompleteJob(CompleteJobRequest) returns (google.protobuf.Empty); //buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+    rpc CompletePlaylist(CompletePlaylistRequest) returns (google.protobuf.Empty);
+
+    rpc GetJob(GetJobRequest) returns (GetJobResponse);
+    rpc GetJobStatus(GetJobStatusRequest) returns (GetJobStatusResponse);
+    rpc GetJobDetail(GetJobDetailRequest) returns (GetJobDetailResponse);
+    rpc GetPlaylists(GetPlaylistsRequest) returns (GetPlaylistsResponse);
+    rpc DownloadResource(DownloadResourceResponse) returns (google.protobuf.Empty);
+
+    rpc HeartbeatWorker(HeartbeatWorkerRequest) returns (google.protobuf.Empty);
+}
+
+message GetJobDetailRequest {
+    string job_id = 1;
+    string register_id = 2;
+}
+
+message  GetJobDetailResponse {
+    Job job = 1;
+}
+
+message HeartbeatWorkerRequest {
+    string worker_id = 1;
+    string status = 2;
+    repeated GpuInfo gpu_infos = 3;
+}
+
+message GetPlaylistsRequest {
+    string register_id =1;
+    int64 cursor =2;
+    string status = 3;
+}
+
+message GetPlaylistsResponse {
+    repeated Playlist playlists = 1;
+    int64 next_cursor =2;
+}
+
+message RegisterWorkerRequest {
+    string name = 1;
+    repeated GpuInfo gpu_infos = 2;
+}
+
+message CompletePlaylistRequest {
+    string worker_id = 1;
+    Playlist playlist = 2;
+}
+
+message GpuInfo {
+    int32 id = 1;
+    string name = 2;
+    string driver_version = 3;
+    string cuda_version = 4;
+}
+
+message RegisterWorkerResponse {
+    string worker_id = 1;
+}
+
+
+message GetJobStatusRequest {
+    string job_id = 1;
+}
+
+message GetJobStatusResponse {
+    string job_id = 1;
+    string status = 2;
+}
+
+message RegisterJobRequest {
+    string media_id = 1;
+    string type = 2;
+    string register_id = 3;
+    repeated PlaylistConfig playlist_configs = 4;
+}
+
+message PlaylistConfig {
+    string name = 1;
+    string type = 2;
+    VideoConfig video_config = 3;
+    AudioConfig audio_config = 4;
+    SegmentConfig segment_config = 5;
+    string resolution = 6;
+}
+
+message RegisterJobResponse {
+    Job job = 1;
+}
+
+message UploadMediaResourceRequest {
+    string job_id = 1;
+    FileInfo file_info = 2;
+    BlockMetadata block_metadata = 3;
+    bytes data = 4;
+}
+
+message BlockMetadata {
+    int32 size = 2;
+    string checksum = 3;
+}
+
+message FileInfo {
+    string name = 1;
+    int64 size = 2;
+    string type = 3;
+}
+
+
+message UploadMediaResourceResponse {
+    string job_id = 1;
+    string media_id = 2;
+}
+
+message DownloadMediaResourceRequest {
+    string job_id = 1;
+    string worker_id = 2;
+    string type = 3;
+}
+
+message DownloadMediaResourceResponse {
+    string job_id = 1;
+    FileInfo file_info = 2;
+    BlockMetadata block_metadata = 3;
+    bytes data = 4;
+}
+
+message CompleteJobRequest {
+    string worker_job_id = 1;
+}
+
+message DownloadResourceResponse {
+    string job_id = 1;
+    string media_id = 2;
+    bytes data = 3;
+}
+
+message GetJobRequest {
+    string worker_id = 1;
+}
+
+message GetJobResponse {
+    Job job = 1;
+    string worker_job_id = 2;
+}
+
+
+message Job {
+    string id = 1;
+    string media_id = 2;
+    string type = 3;
+    repeated Playlist playlists = 4;
+    string status = 5;
+    int64 created_at = 6;
+    int64 completed_at = 7;
+}
+
+message Playlist {
+    string id = 1;
+    string name = 2;
+    string status = 3;
+    string type = 4;
+    VideoConfig video_config = 5;
+    AudioConfig audio_config = 6;
+    SegmentConfig segment_config = 7;
+    int64 created_at = 8;
+    repeated File files = 9;
+    string video_codec = 10;
+    string audio_codec = 11;
+    string job_id = 12;
+    string resolution = 13;
+}
+
+message File {
+    string id = 1;
+    string type = 2;
+    int64 offset = 3;
+    int64 size = 4;
+    int32 index = 5;
+    string name = 6;
+}
+
+message VideoConfig {
+    string codec = 1;
+    string colour_format = 2;
+    int32 index = 3;
+    int64 bitrate = 4;
+    int64 size = 5;
+    int32 width = 6;
+    int32 height = 7;
+    float avg_frame_rate = 8;
+    WatermarkConfig watermark_config = 9;
+    string avg_frame_rate_string = 10;
+    int32 bandwidth = 11;
+    string mimetype = 12;
+    string partial  = 13;
+    string sar = 14;
+    float start_time = 15;
+}
+
+message WatermarkConfig {
+    int32 width = 1;
+    int32 height = 2;
+    float opacity = 3;
+    int32 top = 4;
+    int32 left = 5;
+}
+
+message AudioConfig {
+    string codec = 1;
+    int32 index = 2;
+    int64 bitrate = 3;
+    int32 sample_rate = 4;
+    string channels = 5;
+    string language = 6;
+    bool is_default = 7;
+    string mimetype = 8;
+    int32 bandwidth = 9;
+    float start_time = 10;
+}
+
+message SegmentConfig {
+    string segment_type = 1;
+    string container_type = 2;
+    int32 duration = 3;
+}

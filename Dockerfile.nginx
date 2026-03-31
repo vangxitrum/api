@@ -1,0 +1,8 @@
+FROM openresty/openresty:alpine-fat
+
+RUN luarocks install lua-resty-redis
+
+COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
+
+COPY ./nginx/redis_lookup.lua /etc/nginx/lua/redis_lookup.lua
+

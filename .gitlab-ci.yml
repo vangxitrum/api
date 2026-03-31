@@ -1,0 +1,285 @@
+image: registry:5000/go:1.23
+
+stages:
+  - build
+  - deploy
+
+variables:
+  API_BIN_NAME: "api"
+  API_CONTAINER_NAME: "aioz-stream-api"
+  BACKUP_RETENTION_DAYS: "30"
+  STAG_DEPLOY_ENV: "staging"
+  STAG_SSH_USER: "root"
+  PROD_DEPLOY_ENV: "production"
+  PROD_SSH_USER: "root"
+
+workflow:
+  rules:
+    - if: "$CI_COMMIT_BRANCH =~ /^develop/"
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - when: never
+
+build-job:
+  stage: build
+  tags:
+    - linux
+  before_script:
+    - go env -w GOPRIVATE=10.0.0.50/
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@10.0.0.50/".insteadOf "https://10.0.0.50/"
+    - |
+      if [[ "$CI_COMMIT_BRANCH" == develop-* ]]; then
+        test -n "$STAG_DEPLOY_PATH" || { echo "ERROR: STAG_DEPLOY_PATH variable is not set in GitLab CI/CD Variables"; exit 1; }
+        export DEPLOY_ENV="$STAG_DEPLOY_ENV"
+        export DEPLOY_PATH="$STAG_DEPLOY_PATH"
+      elif [ "$CI_COMMIT_BRANCH" = "main" ]; then
+        test -n "$PROD_DEPLOY_PATH" || { echo "ERROR: PROD_DEPLOY_PATH variable is not set in GitLab CI/CD Variables"; exit 1; }
+        export DEPLOY_ENV="$PROD_DEPLOY_ENV"
+        export DEPLOY_PATH="$PROD_DEPLOY_PATH"
+      fi
+    - echo "DEPLOY_ENV=$DEPLOY_ENV" >> build.env
+    - echo "DEPLOY_PATH=$DEPLOY_PATH" >> build.env
+    - echo "API_CONTAINER_NAME=$API_CONTAINER_NAME" >> build.env
+  script:
+    - echo "Compiling Go application"
+    - echo "Branch $CI_COMMIT_BRANCH"
+    - echo "Environment $DEPLOY_ENV"
+    - echo "Binary $API_BIN_NAME"
+    - go mod tidy
+    - make build
+    - echo "Build complete, moving binary..."
+    - mv "bin/${API_BIN_NAME}" "${API_BIN_NAME}"
+    - ls -lh "${API_BIN_NAME}"
+    - echo "✓ Binary ready for deployment"
+  artifacts:
+    paths:
+      - "${API_BIN_NAME}"
+    expire_in: 10 minutes
+    reports:
+      dotenv: build.env
+  rules:
+    - if: "$CI_COMMIT_BRANCH =~ /^develop/"
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+deploy:
+  stage: deploy
+  tags:
+    - linux
+  image: alpine:3.20
+  before_script:
+    - apk add --no-cache openssh findutils
+    - |
+      if [ "$CI_COMMIT_BRANCH" = "develop" ]; then
+        test -n "$STAG_HOST" || { echo "ERROR: STAG_HOST variable is not set in GitLab CI/CD Variables"; exit 1; }
+        test -n "$STAG_SSH_PRIVATE_KEY" || { echo "ERROR: STAG_SSH_PRIVATE_KEY variable is not set in GitLab CI/CD Variables"; exit 1; }
+
+        export SSH_HOST="$STAG_HOST"
+        export SSH_USER="$STAG_SSH_USER"
+        export SSH_PRIVATE_KEY="$STAG_SSH_PRIVATE_KEY"
+      elif [ "$CI_COMMIT_BRANCH" = "main" ]; then
+        test -n "$PROD_HOST" || { echo "ERROR: PROD_HOST variable is not set in GitLab CI/CD Variables"; exit 1; }
+        test -n "$PROD_SSH_PRIVATE_KEY" || { echo "ERROR: PROD_SSH_PRIVATE_KEY variable is not set in GitLab CI/CD Variables"; exit 1; }
+
+        export SSH_HOST="$PROD_HOST"
+        export SSH_USER="$PROD_SSH_USER"
+        export SSH_PRIVATE_KEY="$PROD_SSH_PRIVATE_KEY"
+      fi
+
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - echo "$SSH_PRIVATE_KEY" | base64 -d > ~/.ssh/deploy_key
+    - chmod 600 ~/.ssh/deploy_key
+    - ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+    - echo "Deploying to $DEPLOY_ENV"
+    - echo "Target $SSH_USER@$SSH_HOST"
+    - echo "Path $DEPLOY_PATH"
+    - echo "Container $API_CONTAINER_NAME"
+    - echo "Backup retention ${BACKUP_RETENTION_DAYS} days"
+  script:
+    - ls -lh "${API_BIN_NAME}"
+    - scp -i ~/.ssh/deploy_key "${API_BIN_NAME}" "${SSH_USER}@${SSH_HOST}:/tmp/${API_BIN_NAME}"
+    - |
+      ssh -i ~/.ssh/deploy_key "${SSH_USER}@${SSH_HOST}" \
+        API_BIN_NAME="${API_BIN_NAME}" \
+        DEPLOY_PATH="${DEPLOY_PATH}" \
+        API_CONTAINER_NAME="${API_CONTAINER_NAME}" \
+        BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS}" \
+        'bash -euo pipefail -s' <<'REMOTE'
+      set -euo pipefail
+
+      TS="$(date +%Y%m%d%H)"
+      BIN="${DEPLOY_PATH}/${API_BIN_NAME}"
+      BK_DIR="${DEPLOY_PATH}/BackUps"
+      SRC="/tmp/${API_BIN_NAME}"
+      RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
+
+      echo "=========================================="
+      echo "Deployment Script Starting"
+      echo "=========================================="
+      echo "Binary: ${API_BIN_NAME}"
+      echo "Deploy Path: ${DEPLOY_PATH}"
+      echo "Backup Dir: ${BK_DIR}"
+      echo "Retention: ${RETENTION_DAYS} days"
+      echo ""
+
+      echo "Ensuring directories exist"
+      mkdir -p "${DEPLOY_PATH}" "${BK_DIR}"
+
+      echo "=========================================="
+      echo "Cleaning Old Backups"
+      echo "=========================================="
+      echo "Searching for backups older than ${RETENTION_DAYS} days"
+
+      DELETED_COUNT=0
+      TOTAL_SIZE=0
+
+      while IFS= read -r backup_file; do
+        if [ -n "$backup_file" ] && [ -f "$backup_file" ]; then
+          FILE_SIZE=$(stat -c %s "$backup_file" 2>/dev/null || stat -f %z "$backup_file" 2>/dev/null || echo "0")
+          FILE_SIZE_HR=$(du -h "$backup_file" | cut -f1)
+          FILE_DATE=$(stat -c %y "$backup_file" 2>/dev/null | cut -d' ' -f1 || stat -f "%Sm" -t "%Y-%m-%d" "$backup_file" 2>/dev/null || echo "unknown")
+
+          if command -v date >/dev/null 2>&1; then
+            FILE_MTIME=$(stat -c %Y "$backup_file" 2>/dev/null || stat -f %m "$backup_file" 2>/dev/null || echo "0")
+            FILE_AGE=$(( ($(date +%s) - FILE_MTIME) / 86400 ))
+          else
+            FILE_AGE="unknown"
+          fi
+
+          echo "  ✗ $(basename "$backup_file")"
+          echo "    Size: ${FILE_SIZE_HR}"
+          echo "    Date: ${FILE_DATE}"
+          echo "    Age: ${FILE_AGE} days"
+
+          rm -f "$backup_file"
+          DELETED_COUNT=$((DELETED_COUNT + 1))
+          TOTAL_SIZE=$((TOTAL_SIZE + FILE_SIZE))
+        fi
+      done < <(find "${BK_DIR}" -name "${API_BIN_NAME}.bk*" -type f -mtime +${RETENTION_DAYS} 2>/dev/null || true)
+
+      if [ $DELETED_COUNT -gt 0 ]; then
+        TOTAL_SIZE_MB=$(awk "BEGIN {printf \"%.2f\", $TOTAL_SIZE / 1048576}")
+        echo ""
+        echo "Cleanup Summary:"
+        echo "  Deleted: ${DELETED_COUNT} backup(s)"
+        echo "  Freed: ${TOTAL_SIZE_MB} MB"
+        echo "✓ Old backups cleaned"
+      else
+        echo "✓ No old backups found to clean"
+      fi
+      echo ""
+
+      echo "=========================================="
+      echo "Current Backup Status"
+      echo "=========================================="
+      BACKUP_COUNT=$(find "${BK_DIR}" -name "${API_BIN_NAME}.bk*" -type f 2>/dev/null | wc -l)
+
+      if [ "$BACKUP_COUNT" -gt 0 ]; then
+        BACKUP_SIZE=$(du -sh "${BK_DIR}" 2>/dev/null | cut -f1 || echo "unknown")
+        echo "Total backups: ${BACKUP_COUNT} file(s)"
+        echo "Total size: ${BACKUP_SIZE}"
+        echo ""
+        echo "Recent backups (last 5):"
+        find "${BK_DIR}" -name "${API_BIN_NAME}.bk*" -type f -printf "%T@ %p\n" 2>/dev/null | \
+          sort -rn | head -5 | while read -r timestamp filepath; do
+            if [ -n "$filepath" ] && [ -f "$filepath" ]; then
+              FILE_SIZE=$(du -h "$filepath" 2>/dev/null | cut -f1 || echo "?")
+              FILE_DATE=$(stat -c %y "$filepath" 2>/dev/null | cut -d' ' -f1 || stat -f "%Sm" -t "%Y-%m-%d" "$filepath" 2>/dev/null || echo "?")
+              echo "  • $(basename "$filepath") - ${FILE_SIZE} (${FILE_DATE})"
+            fi
+          done
+      else
+        echo "No backups exist yet"
+      fi
+      echo ""
+
+      echo "=========================================="
+      echo "Creating New Backup"
+      echo "=========================================="
+      if [ -f "${BIN}" ]; then
+        CURRENT_SIZE=$(du -h "${BIN}" | cut -f1)
+        echo "Backing up current binary"
+        echo "  Source: ${BIN}"
+        echo "  Size: ${CURRENT_SIZE}"
+        echo "  Destination: ${BK_DIR}/${API_BIN_NAME}.bk${TS}"
+
+        cp "${BIN}" "${BK_DIR}/${API_BIN_NAME}.bk${TS}"
+        echo "✓ Backup created successfully"
+      else
+        echo "⚠ No existing binary at ${BIN} (first deploy?)"
+      fi
+      echo ""
+
+      echo "=========================================="
+      echo "Deploying New Binary"
+      echo "=========================================="
+      NEW_SIZE=$(du -h "${SRC}" | cut -f1)
+      echo "Moving new binary"
+      echo "  Source: ${SRC}"
+      echo "  Size: ${NEW_SIZE}"
+      echo "  Destination: ${BIN}"
+
+      mv "${SRC}" "${BIN}"
+      chmod +x "${BIN}"
+      echo "✓ Binary deployed successfully"
+      echo ""
+
+      echo "=========================================="
+      echo "Docker Container Restart"
+      echo "=========================================="
+      COMPOSE_DIR="$(dirname "${DEPLOY_PATH}")"
+
+      echo "Navigating to compose directory: ${COMPOSE_DIR}"
+      cd "${COMPOSE_DIR}"
+
+      if [ ! -f "docker-compose.yml" ]; then
+        echo "✗ ERROR: docker-compose.yml not found in ${COMPOSE_DIR}"
+        exit 1
+      fi
+
+      echo "✓ docker-compose.yml found"
+      echo ""
+      echo "Restarting container: ${API_CONTAINER_NAME}..."
+
+      if command -v docker >/dev/null 2>&1; then
+        echo "Using: docker"
+        docker restart "${API_CONTAINER_NAME}"
+      elif command -v podman >/dev/null 2>&1; then
+        echo "Using: podman"
+        podman restart "${API_CONTAINER_NAME}"
+      else
+        echo "✗ ERROR: Neither docker nor podman found"
+        exit 1
+      fi
+
+      echo "✓ Container restarted successfully"
+
+      echo ""
+      echo "=========================================="
+      echo "✓ Deployment Completed Successfully"
+      echo "=========================================="
+      echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+      echo "Binary: ${API_BIN_NAME}"
+      echo "Environment: ${DEPLOY_PATH}"
+      echo "Container: ${API_CONTAINER_NAME}"
+      REMOTE
+  after_script:
+    - shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key || true
+    - echo "✓ Deployment script finished"
+  environment:
+    name: $DEPLOY_ENV
+    url: http://$SSH_HOST
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: on_success
+      variables:
+        DEPLOY_ENV: $PROD_DEPLOY_ENV
+        DEPLOY_PATH: $PROD_DEPLOY_PATH
+        API_CONTAINER_NAME: $API_CONTAINER_NAME
+    - if: "$CI_COMMIT_BRANCH =~ /^develop/"
+      when: on_success
+      variables:
+        DEPLOY_ENV: $STAG_DEPLOY_ENV
+        DEPLOY_PATH: $STAG_DEPLOY_PATH
+        API_CONTAINER_NAME: $API_CONTAINER_NAME
+    - when: never

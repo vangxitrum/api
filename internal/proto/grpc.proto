@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+option go_package = "/grpc_service";
+
+service GRPCService {
+  rpc UploadVTTFiles (UploadVTTFilesRequest) returns (UploadVTTFilesResponse);
+  rpc DownloadAudioFile (MediaInfoRequest) returns (stream AudioFileChunk);
+
+  rpc UploadMedia(stream UploadMediaRequest) returns (UploadMediaResponse);
+
+  rpc Ping (PingRequest) returns (PingResponse);
+}
+
+message PingRequest {
+    string message = 1;
+}
+
+message PingResponse {
+    string message = 1;
+}
+
+
+message UploadMediaRequest {
+    string media_id = 1;
+    FileInfo file_info = 2;
+    BlockMetadata block_metadata = 3;
+    bytes data = 4;
+}
+
+message UploadMediaResponse {
+    string media_id = 1;
+}
+
+message BlockMetadata {
+    int32 size = 2;
+    string checksum = 3;
+}
+
+message FileInfo {
+    string name = 1;
+    int64 size = 2;
+    string type = 3;
+}
+
+message MediaInfoRequest {
+  string id = 1;
+  string lang = 2;
+  string action = 3;
+  int32 startChunk = 4;
+}
+
+message UploadVTTFilesRequest {
+  repeated VTTFile files = 1;
+}
+
+message VTTFile {
+  string id = 1;
+  string filename = 2;
+  bytes content = 3;
+}
+
+message UploadVTTFilesResponse {
+  string message = 1;
+}
+
+message AudioFileChunk {
+  bytes data = 1;
+  int32 chunkNumber = 2;
+  int32 totalChunks = 3;
+}
+
+//command protoc   --go_out=.   --go-grpc_out=.   internal/proto/grpc.proto

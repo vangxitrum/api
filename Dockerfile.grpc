@@ -1,0 +1,21 @@
+FROM ubuntu:22.04
+
+ENV TZ=Asia/Ho_Chi_Minh \
+    DEBIAN_FRONTEND=noninteractive
+
+ENV APP_ENV=app
+RUN apt-get update && \
+    apt-get install -y ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+USER root
+
+RUN mkdir /app
+
+WORKDIR /app
+
+COPY ./bin/grpc .
+
+COPY ./app.env ./bin/
+
+CMD ["/app/grpc"]

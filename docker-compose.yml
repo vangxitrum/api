@@ -1,0 +1,275 @@
+networks:
+  stream:
+    driver: bridge
+  monitor:
+    driver: bridge
+
+services:
+  api:
+    container_name: aioz-stream-api
+    profiles:
+      - vod
+    env_file:
+      - ./app.env
+    tty: true
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./app.env:/app/app.env
+      - ./bin/api:/app/api
+      - ./input:/app/input
+      - ./input-live:/app/input-live
+      - ./templates:/app/templates
+      - ./internal/triggers/trigger.sql:/app/internal/triggers/trigger.sql
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      # uncomment if using pgcart
+      # pgcat:
+      #   condition: service_started
+    networks:
+      - stream
+      - monitor
+  livestream:
+    container_name: aioz-stream-live
+    profiles:
+      - livestream
+    env_file:
+      - ./app.env
+    tty: true
+    build:
+      context: .
+      dockerfile: Dockerfile.live
+    ports:
+      - "1935:1935"
+      - "2327:2327"
+    volumes:
+      - ./input-live:/app/input-live
+      - ./input:/app/input
+      - ./output:/app/output
+      - ./app.env:/app/app.env
+      - ./bin/livestream:/app/livestream
+      - ./aioz-live.yml:/app/aioz-live.yml:ro
+      - ./streamId:/app/streamId:rw
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - stream
+  livestream2:
+    container_name: aioz-stream-live2
+    profiles:
+      - prod
+      - livestream
+    env_file:
+      - ./app.env
+    tty: true
+    build:
+      context: .
+      dockerfile: Dockerfile.live
+    ports:
+      - "1939:1935"
+      - "2329:2327"
+    volumes:
+      - ./input-live:/app/input-live
+      - ./input:/app/input
+      - ./output:/app/output
+      - ./app.env:/app/app.env
+      - ./bin/livestream:/app/livestream
+      - ./aioz-live2.yml:/app/aioz-live.yml:ro
+      - ./streamId:/app/streamId:rw
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - stream
+  pgcat:
+    image: tuantqaioz/pgcat:v1.2.0
+    container_name: aioz-stream-pgcat
+    profiles:
+      - vod
+      - livestream
+    # open to add host
+    # extra_hosts:
+    command:
+      - "pgcat"
+      - "/etc/pgcat/pgcat.toml"
+    volumes:
+      - "./pgcat.toml:/etc/pgcat/pgcat.toml"
+    ports:
+      - "6432:6432"
+      - "9930:9930"
+    networks:
+      - stream
+    depends_on:
+      postgres:
+        condition: service_healthy
+  postgres:
+    container_name: aioz-stream-db
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    profiles:
+      - vod
+      - livestream
+    env_file:
+      - ./app.env
+    shm_size: 1gb
+    ports:
+      - "5437:5432"
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin"]
+      interval: 5s
+      timeout: 20s
+      retries: 5
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    networks:
+      - stream
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: aioz-stream-rabbitmq
+    profiles:
+      - vod
+      - livestream
+    env_file:
+      - ./app.env
+    ports:
+      - "5675:5672"
+      - "15675:15672"
+    restart: always
+    volumes:
+      - ./rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 5s
+      timeout: 20s
+      retries: 5
+    networks:
+      - stream
+  prometheus:
+    image: prom/prometheus
+    profiles:
+      - monitor
+    container_name: aioz-stream-prometheus
+    ports:
+      - 9090:9090
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - api
+    networks:
+      - stream
+      - monitor
+  grafana:
+    image: grafana/grafana
+    profiles:
+      - monitor
+    container_name: aioz-stream-grafana
+    user: "1000"
+    env_file:
+      - ./app.env
+    ports:
+      - 3001:3000
+    volumes:
+      - ./grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+      - ./libgrafana:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - stream
+      - monitor
+  promtail:
+    image: grafana/promtail:2.9.2
+    container_name: aioz-stream-promtail
+    command: -config.file=/etc/promtail/config.yml
+    profiles:
+      - monitor
+    volumes:
+      - ./promtail-config.yaml:/etc/promtail/config.yml
+      - /var/log:/var/log
+    networks:
+      - monitor
+  grpc:
+    container_name: aioz-stream-grpc
+    profiles:
+      - livestream
+    build:
+      context: .
+      dockerfile: Dockerfile.grpc
+    env_file:
+      - ./app.env
+    tty: true
+    ports:
+      - "50051:50051"
+    volumes:
+      - ./app.env:/app/app.env
+      - ./output:/app/output
+      - ./input:/app/input
+      - ./bin/grpc:/app/grpc
+    restart: unless-stopped
+    networks:
+      - stream
+  redis:
+    container_name: aioz-stream-redis
+    profiles:
+      - vod
+      - livestream
+    image: redis:7.4.3-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    networks:
+      - stream
+  nginx:
+    container_name: aioz-stream-nginx
+    profiles:
+      - livestream
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "1936:1935"
+      - "9997:9997"
+    env_file:
+      - ./app.env
+    volumes:
+      - ./nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf
+    #   - ./html:/usr/local/nginx/html
+    #   - ./logs:/var/log/nginx
+    networks:
+      - stream
+    depends_on:
+      - livestream
+      - redis
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:latest
+    container_name: aioz-stream-node-reporter
+    profiles:
+      - monitor
+    command:
+      - "--path.rootfs=/host"
+    pid: host
+    restart: unless-stopped
+    volumes:
+      - "/:/host:ro,rslave"
+    networks:
+      - monitor
